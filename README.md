@@ -77,7 +77,7 @@ pytest -k order_from                  # tests whose name matches
 pytest -v                             # list each test
 ```
 
-The suite currently has 51 tests and runs in about a second. Each milestone ends with an exit test from the plan; the next milestone does not start until it passes.
+The suite currently has 88 tests and runs in about three seconds. Each milestone ends with an exit test from the plan; the next milestone does not start until it passes.
 
 ## Running the project
 
@@ -93,7 +93,7 @@ from shor.factor import shor_factor
 shor_factor(989, classical_order, random.Random(1))   # (23, 43)
 ```
 
-`shor_factor(N, find_order, rng)` accepts any function `find_order(a, N)` that returns the order of a mod N, or `None` on failure. The quantum order finders from M4, M5 and M7 will plug into the same argument.
+`shor_factor(N, find_order, rng)` accepts any function `find_order(a, N)` that returns the order of a mod N, or `None` on failure. The quantum order finders from M4, M5 and M7 will take extra parameters such as `shots`, with defaults so that they can be passed in the same way. If a finder returns a wrong value or a multiple of the order, the driver notices and tries another base.
 
 Valid inputs are odd composites that are not prime powers (15, 21, 33, 35, 39, 45, …). Anything else raises `ValueError`.
 
@@ -106,7 +106,10 @@ classical_order(2, 989)                             # 154
 # Two ideal samples for r = 154 with t = 20 phase bits. Alone they give the
 # denominators 11 and 14; their lcm is the order.
 order_from_samples([95325, 74898], 20, 2, 989)      # 154
+order_from_samples([95325], 20, 2, 989)             # None: one shot is not enough here
 ```
+
+`order_from_samples` only uses a sample that lies next to a peak s·2^t / r of the phase-estimation distribution. This keeps it from finding r by classical trial and error: from 20 random samples it returns r = 154 in under 1% of trials, and from 5 samples of an ideal circuit in over 99%. Its result is always a multiple of r and almost always r itself.
 
 ## How the algorithm is put together
 
@@ -122,7 +125,7 @@ Targets, from the plan:
 | Primary: N ≤ 50 | Complete Shor circuit with reversible arithmetic | 2n+3 = 15 at n = 6 |
 | Secondary: N ≤ 1000 | Phase estimation with U_a as a permutation matrix | n+1 = 11 at n = 10 |
 
-To keep the qubit count this low, order finding uses iterative phase estimation with one recycled control qubit instead of a 2n-qubit counting register.
+To keep the qubit count this low, order finding uses iterative phase estimation with one recycled control qubit instead of a 2n-qubit counting register. The N = 15 warm-up in M4 is the exception and uses the textbook form.
 
 ## Conventions
 
@@ -131,6 +134,7 @@ To keep the qubit count this low, order finding uses iterative phase estimation 
 - **Phase estimate:** every phase-estimation variant returns an integer y with y / 2^t ≈ phase.
 - **Hand-built blocks:** the QFT and the adders are not replaced with library gates.
 - **Commits:** one commit per passed exit test, made with `git commit -s`, on `main`.
+- **Evidence:** a correct factorisation is weak evidence that a circuit works, because a random base often shares a factor with a small N and the classical checks are forgiving. Each quantum milestone is tested on its measured distribution as well.
 
 Section 3 of the plan has the full list, including the exact QFT definition.
 

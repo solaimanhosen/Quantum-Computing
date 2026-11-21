@@ -1,6 +1,6 @@
 # Shor's Factoring Algorithm in Qiskit — Implementation Plan
 
-Revised 2026-11-20. Learning project: build Shor's algorithm from first principles, one tested layer at a time, on a simulator.
+Revised 2026-11-20; M1 and the exit tests that depend on it were revised again the same day after a code review (see M1). Learning project: build Shor's algorithm from first principles, one tested layer at a time, on a simulator.
 
 ## 1. Scope and targets
 
@@ -40,7 +40,9 @@ M2 is implemented exactly once and reused twice: its inverse closes textbook QPE
 - **No-swap QFT:** `qft(m, do_swaps=False)` leaves qubit j in (|0⟩ + exp(2πi·x / 2^(j+1)) |1⟩)/√2. Following it with the bit-reversal swaps gives the QFT above (verified numerically).
 - **Phase estimate:** every QPE variant returns an integer y with y / 2^t ≈ phase.
 - **Environment:** Python ≥ 3.10, `qiskit` 2.6.x, `qiskit-aer` 0.18.x (the versions the measurements above were taken with), `numpy`, `pytest`.
-- **Commits:** one commit per passed exit test. No `Co-Authored-By` or session trailer lines in commit messages.
+- **Commits:** one commit per passed exit test, made with `git commit -s` on `main`. No `Co-Authored-By` or session trailer lines in commit messages; the `Signed-off-by` line that `-s` adds is wanted.
+- **Order finder interface:** every order finder can be called as `find_order(a, N)` and returns a Python `int` or `None`. Extra parameters such as `shots` have defaults, so the function can be passed to `shor_factor` unchanged (`functools.partial` changes a default). The value returned is a multiple of r, almost always r itself; `None` means the shots did not determine it.
+- **What counts as evidence:** a correct order or factorisation is weak evidence that a circuit works. The classical post-processing checks a^c ≡ 1 (mod N), so for small N it can reach r from poor samples, and `shor_factor` returns a factor without any order finding when the random base shares one with N (half the bases for N = 15). Every quantum milestone therefore has an exit test on the measured y distribution, and every end-to-end test asserts that the order finder was called.
 
 ## 4. Suggested layout
 
@@ -71,18 +73,31 @@ Each milestone ends with an exit test. Do not start the next milestone until it 
 
 Implement in `classical.py` and `factor.py`:
 
-- `classical_order(a, N)`: brute-force order, used as ground truth in every later test.
-- `is_prime_power(N)`.
-- `convergent_denominators(y, t, N)`: denominators below N of the continued-fraction convergents of y / 2^t.
-- `order_from_samples(ys, t, a, N)`: for each y take the candidate denominators, accept r' if a^r' ≡ 1 (mod N); otherwise combine candidates across shots with lcm and try small multiples. Discard y = 0.
-- `shor_factor(N, find_order, rng)`: reject even N and prime powers, pick random a, return gcd(a, N) if it is non-trivial, call `find_order(a, N)`, retry if r is odd or a^(r/2) ≡ −1 (mod N), otherwise return gcd(a^(r/2) ± 1, N).
+- `classical_order(a, N)`: brute-force order, used as ground truth in every later test. Raises `ValueError` if N < 2 or gcd(a, N) ≠ 1.
+- `is_prime_power(N)`: true for p^k with k ≥ 1, so primes are included.
+- `convergents(y, t, N)`: the continued-fraction convergents (p, q) of y / 2^t with q < N. Raises `ValueError` unless 0 ≤ y < 2^t, which catches a wrong t or bit order in the caller.
+- `order_candidates(y, t, N)`: the denominators q of those convergents that satisfy |y·q − p·2^t| < q, meaning y is one of the two integers next to the peak p·2^t / q. A y that is next to no peak gives no candidates.
+- `order_from_samples(ys, t, a, N)`: take the candidates of every shot, add their lcms across shots (below N), then the multiples k·d for k = 2, 3, 4 and d > 1. Return the smallest candidate c with a^c ≡ 1 (mod N), or `None`. Inputs may be numpy integers; the result is a Python `int`.
+- `shor_factor(N, find_order, rng, max_attempts=100)`: reject even N and prime powers, pick random a in 2..N−2, return gcd(a, N) if it is non-trivial, call `find_order(a, N)`, retry if it returns `None` or a value with a^r ≢ 1, if r is odd, or if a^(r/2) ≡ −1 (mod N); otherwise return gcd(a^(r/2) ± 1, N) as (p, q) with p ≤ q. If both gcds are trivial (r was an even multiple of the order), retry. Raise `RuntimeError` after `max_attempts`.
+
+Properties of `order_from_samples` to keep in mind later:
+
+- **The window in `order_candidates` is essential.** The first version took every convergent of every shot as a candidate. Combined with the lcm step, the multiples and the a^c ≡ 1 check, that was a classical search: from 20 uniformly random y it returned r = 154 for N = 989 in 96% of trials. With the window the figure is below 1%, while ideal QPE samples still give r in about 72% of trials from one shot, 98% from three and over 99% from five (measured for N = 21, 35, 143 and 989).
+- **It cannot be made blind for very small N.** For N = 15 there are only 14 possible denominators, so 20 random shots still return 4 in about 19% of trials and a wrong multiple (8 or 12) in about 67%. Results for N = 15 say little about the circuit that produced the samples.
+- **The result is a multiple of r, not always r.** It equals r whenever r is among the candidates. A y halfway between two peaks looks like a peak of the order 2r, so a proper multiple is possible when no other shot leads to r; in ideal QPE samples this was not observed beyond 0.3% of single-shot trials. The multiple is deliberately not reduced to r by dividing out primes: that would turn every multiple of r below N into a hit and make random samples succeed far more often. `shor_factor` detects the case and retries.
+- **y = 0 is not discarded.** It yields only the candidate 1, which passes only for a ≡ 1 (order 1), and its multiples are not tried.
 
 Exit tests:
 
-1. With `find_order = classical_order`, `shor_factor` factors every valid N ≤ 1000.
+1. With `find_order = classical_order`, `shor_factor` factors every valid N ≤ 1000, both with random bases and when offered only bases coprime to N (so that every factorisation comes from an order).
 2. For several (a, N), feed the ideal samples y = round(s·2^t / r) for all s into `order_from_samples`; it returns r.
+3. Both integers next to s·2^t / r give the candidate r / gcd(s, r), for every r < N / 2.
+4. Samples drawn from the exact QPE distribution give r from 5 shots in at least 95% of trials, and 20 uniformly random samples give r = 154 for N = 989 in fewer than 5% of trials.
 
-Concept check: why does t = 2n guarantee that s/r appears among the convergents of y / 2^t?
+Concept checks:
+
+- Why does t = 2n guarantee that s/r appears among the convergents of y / 2^t when y is the integer nearest to s·2^t / r?
+- Show that r < N / 2 for every valid input, and that this extends the guarantee to both neighbours of the peak.
 
 ### M2 — QFT and inverse QFT
 
@@ -130,13 +145,14 @@ Concept check: show that the round-k correction phase is exactly what the invers
 Exit tests:
 
 1. Each U_a maps |y⟩ to |a·y mod 15⟩ for y = 1, …, 14.
-2. For a = 7, the measured y is 0, 64, 128 or 192, each with probability 1/4.
-3. `shor_factor(15, …)` returns 3 × 5 using this order finder.
+2. For a = 7, the measured y is 0, 64, 128 or 192, each with probability 1/4. For each of the seven bases, the only outcomes are the multiples of 256 / r. This is the test that shows the circuit works.
+3. The order returned agrees with `classical_order` for each of the seven bases, and `shor_factor(15, …)` returns 3 × 5 when the base is fixed to a = 7 and the order finder is confirmed to have been called. On its own this test proves little at N = 15 (see M1).
 
 ### M5 — Oracle order finding for N ≤ 1000
 
 - `controlled_permutation(a, N)`: the 2^(n+1)-dimensional matrix of controlled-U_a with the control as qubit 0 (index = c + 2y). States y ≥ N map to themselves so the matrix is unitary.
-- `find_order_oracle(a, N, shots)`: iterative QPE (M3b) with U^(2^j) = U_{a^(2^j) mod N}, target initialised to |1⟩, post-processed with M1.
+- `find_order_oracle(a, N, shots=10, seed=None)`: iterative QPE (M3b) with U^(2^j) = U_{a^(2^j) mod N}, target initialised to |1⟩, post-processed with M1. If `order_from_samples` returns `None`, take another batch of `shots` for the same a and post-process all shots together, up to three batches, before returning `None`; a new base would throw the earlier shots away.
+- `sample_phases_oracle(a, N, shots, seed=None)`: the same circuit without the post-processing, returning the list of measured y. `find_order_oracle` is built on it, and the distribution tests use it directly.
 
 This oracle is tabulated classically, so it validates QPE and post-processing; it is not a scalable circuit.
 
@@ -148,7 +164,8 @@ Known pitfalls (hit during prototyping):
 Exit tests:
 
 1. N = 989, a = 2 returns r = 154 and the factors 23 × 43.
-2. `shor_factor` with this order finder factors every valid N ≤ 100 and a random sample of 50 valid N in (100, 1000].
+2. `shor_factor` with this order finder factors every valid N ≤ 100 and a random sample of 50 valid N in (100, 1000], offering only bases coprime to N so that the order finder is called for every N.
+3. Distribution: for N = 35, a = 2 (r = 12) and for N = 989, a = 2, at least 75% of 400 measured y are one of the two integers next to a peak s·2^t / r (theory: at least 8/π² ≈ 81%), and for N = 35 all 12 values of s occur.
 
 Concept check: for r = 154, which eigenphases s/r yield a candidate smaller than r, and what fraction of shots return r exactly?
 
@@ -185,14 +202,14 @@ Concept check: why does the ancilla have to be uncomputed, and what would go wro
 
 ### M7 — Full Shor for N ≤ 50
 
-- `find_order_arith(a, N, shots)`: M3b with the controlled-U_a of M6d, on 2n+3 qubits. Same signature as `find_order_oracle`.
+- `find_order_arith(a, N, shots=10, seed=None)` and `sample_phases_arith(a, N, shots, seed=None)`: M3b with the controlled-U_a of M6d, on 2n+3 qubits. Same signatures and batching as the oracle versions in M5.
 - Run on `AerSimulator(method="statevector")`, transpiled with `optimization_level=0`, `memory=True`.
 
 Exit tests:
 
-1. For N = 15 and 21, the order returned agrees with `classical_order` for every valid a.
-2. `shor_factor` factors each of 15, 21, 33, 35, 39, 45.
-3. For one (a, N), the y-histogram from `find_order_arith` matches `find_order_oracle`.
+1. For N = 15 and 21, the order returned agrees with `classical_order` for every a coprime to N in 2..N−2. Fix the simulator seed so the test is repeatable.
+2. `shor_factor` factors each of 15, 21, 33, 35, 39, 45, offering only bases coprime to N so that the order finder is called.
+3. For N = 21, a = 2 (r = 6), the y-histogram from `sample_phases_arith` matches `sample_phases_oracle`, and at least 75% of the shots are next to a peak. This is the test that shows the arithmetic circuit works; tests 1 and 2 would pass with a mediocre circuit at these sizes.
 
 Reference numbers (a = 2): N = 15 uses 11 qubits and 6.0k gates; N = 21 uses 13 qubits and 12.3k gates; N = 33–45 use 15 qubits and about 22.7k gates at roughly 1.3 s per shot. For r = 12 only about a third of shots give r directly, so the lcm step from M1 matters.
 

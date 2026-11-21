@@ -1,7 +1,9 @@
 """M1 tests for shor/factor.py (the classical driver around order finding)."""
 
 import random
+from math import gcd
 
+import numpy as np
 import pytest
 
 from shor.classical import classical_order
@@ -61,6 +63,19 @@ def test_factors_every_valid_N_up_to_1000():
         assert_nontrivial_factors(N, shor_factor(N, classical_order, rng))
 
 
+def test_order_path_factors_every_valid_N_up_to_1000():
+    # Exit test 1 again, with the gcd shortcut out of the way: only bases
+    # coprime to N are offered, so every factorisation comes from an order.
+    for N in range(3, 1001):
+        if not is_valid_input(N):
+            continue
+        coprime_bases = [a for a in range(2, N - 1) if gcd(a, N) == 1]
+        find_order = CountingOrder()
+        factors = shor_factor(N, find_order, FixedBases(*coprime_bases))
+        assert_nontrivial_factors(N, factors)
+        assert find_order.calls, N
+
+
 def test_order_path_gives_the_factors_of_15():
     # a = 7 has r = 4; 7^2 = 4 (mod 15); gcd(3, 15) = 3 and gcd(5, 15) = 5.
     find_order = CountingOrder()
@@ -94,6 +109,37 @@ def test_retries_when_order_finding_fails_or_is_wrong():
     answers = iter([None, 5, 4])
     factors = shor_factor(15, lambda a, N: next(answers), FixedBases(7, 7, 7))
     assert factors == (3, 5)
+
+
+def test_retries_when_given_an_even_multiple_of_the_order():
+    # a = 7 has r = 4 (mod 15). With 8 instead, a^(8/2) = 1 and both gcds are
+    # trivial; the driver must notice and try again rather than return (1, 15).
+    answers = iter([8, 4])
+    calls = []
+
+    def find_order(a, N):
+        calls.append(a)
+        return next(answers)
+
+    assert shor_factor(15, find_order, FixedBases(7, 7)) == (3, 5)
+    assert calls == [7, 7]
+
+
+def test_odd_multiple_of_the_order_still_factors():
+    # 12 = 3 * 4: a^(12/2) = (a^2)^3 = a^2 * a^4 = a^2, the same half power.
+    assert shor_factor(15, lambda a, N: 12, FixedBases(7)) == (3, 5)
+
+
+def test_accepts_numpy_integer_order():
+    factors = shor_factor(15, lambda a, N: np.int64(4), FixedBases(7))
+    assert factors == (3, 5)
+    assert all(type(f) is int for f in factors)
+
+
+@pytest.mark.parametrize("bad", [0, -4])
+def test_retries_on_non_positive_order(bad):
+    answers = iter([bad, 4])
+    assert shor_factor(15, lambda a, N: next(answers), FixedBases(7, 7)) == (3, 5)
 
 
 def test_gives_up_after_max_attempts():
