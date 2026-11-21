@@ -1,13 +1,13 @@
 # Shor's Factoring Algorithm in Qiskit — Implementation Plan
 
-Revised 2026-11-20; M1 and the exit tests that depend on it were revised again the same day after a code review (see M1). Learning project: build Shor's algorithm from first principles, one tested layer at a time, on a simulator.
+Revised 2026-11-20; M1 and the exit tests that depend on it were revised again the same day after a code review (see M1). M2–M8 were revised on 2026-11-21 after a plan review that prototyped each milestone; no step was found to fail, and the changes make tests and interfaces precise. Learning project: build Shor's algorithm from first principles, one tested layer at a time, on a simulator.
 
 ## 1. Scope and targets
 
-| Target | What runs | Qubits | Cost (measured, Aer statevector, 2 CPU cores) |
+| Target | What runs | Qubits | Cost (measured on 2 CPU cores; Aer statevector with `max_parallel_threads=2` unless noted) |
 |---|---|---|---|
 | **Primary: N ≤ 50, full reversible arithmetic** | Complete Shor circuit, no shortcuts | 2n+3 = 15 at n = 6 | ~22.7k gates, ~1.3 s per shot |
-| Secondary: N ≤ 1000, oracle U_a | QPE + post-processing with U_a as a permutation matrix | n+1 = 11 at n = 10 | ~0.3 s per shot |
+| Secondary: N ≤ 1000, oracle U_a | QPE + post-processing with U_a as a permutation matrix | n+1 = 11 at n = 10 | ~0.3 s per shot with dense matrices on `qiskit.quantum_info.Statevector` |
 | Optional capstone: larger N, full arithmetic | Same code as primary | 19 / 21 / 23 | N=143: 45 s/shot; N=323: 284 s/shot; N=989: ~25–30 min/shot (extrapolated, not run) |
 | Optional: IBM hardware | Compiled N = 15 only | ≤ 5 | The general circuit is far too deep for current devices at any N |
 
@@ -28,7 +28,7 @@ Valid inputs are odd composites that are not prime powers. For N ≤ 50 these ar
 | M4 | First end-to-end factoring: N = 15 with hand-built U_a | M1, M3 | — |
 | M5 | Oracle order finding for any N ≤ 1000 | M1, M3 | M7 (same interface) |
 | M6 | Reversible modular arithmetic (Draper / Beauregard) | M2 | M7 |
-| M7 | Full Shor for N ≤ 50 | M1, M3, M6 | M8 |
+| M7 | Full Shor for N ≤ 50 | M1, M3, M5, M6 | M8 |
 | M8 | Analysis and optional extensions | M7 | — |
 
 M2 is implemented exactly once and reused twice: its inverse closes textbook QPE in M3, and its no-swap form is the basis change for the Fourier-space adder in M6. The iterative QPE of M3 contains no explicit QFT circuit; the inverse QFT is replaced by classically controlled phase corrections.
@@ -42,6 +42,7 @@ M2 is implemented exactly once and reused twice: its inverse closes textbook QPE
 - **Environment:** Python ≥ 3.10, `qiskit` 2.6.x, `qiskit-aer` 0.18.x (the versions the measurements above were taken with), `numpy`, `pytest`.
 - **Commits:** one commit per passed exit test, made with `git commit -s` on `main`. No `Co-Authored-By` or session trailer lines in commit messages; the `Signed-off-by` line that `-s` adds is wanted.
 - **Order finder interface:** every order finder can be called as `find_order(a, N)` and returns a Python `int` or `None`. Extra parameters such as `shots` have defaults, so the function can be passed to `shor_factor` unchanged (`functools.partial` changes a default). The value returned is a multiple of r, almost always r itself; `None` means the shots did not determine it.
+- **Seeding:** each `find_order_*` and `sample_phases_*` call takes `seed` (an int or a `numpy.random.Generator`), creates one `rng = numpy.random.default_rng(seed)` and draws every shot and every batch from it. For `Statevector`, pass the Generator itself to `sv.seed(rng)`; for Aer, pass `seed_simulator=int(rng.integers(2**32))` per run. Never reuse one integer seed per shot or per batch: that makes every shot identical, or every later batch a copy of the first, and no exit test would notice.
 - **What counts as evidence:** a correct order or factorisation is weak evidence that a circuit works. The classical post-processing checks a^c ≡ 1 (mod N), so for small N it can reach r from poor samples, and `shor_factor` returns a factor without any order finding when the random base shares one with N (half the bases for N = 15). Every quantum milestone therefore has an exit test on the measured y distribution, and every end-to-end test asserts that the order finder was called.
 
 ## 4. Suggested layout
@@ -53,7 +54,7 @@ shor/
   qpe.py             # M3
   oracles.py         # M4 (N=15 circuits), M5 (permutation oracle)
   arithmetic.py      # M6
-  order_finding.py   # M5, M7: find_order_oracle, find_order_arith
+  order_finding.py   # M4, M5, M7: find_order_15, find_order_oracle, find_order_arith
   factor.py          # M1 driver, takes any find_order
 tests/               # one test file per module
 experiments/         # M8 scripts and results
@@ -114,38 +115,47 @@ Concept check: derive the product form of QFT|x⟩ and read the circuit off it.
 
 ### M3 — Quantum phase estimation
 
-**M3a, textbook QPE.** `qpe_circuit(controlled_power, t, num_target)`:
+Both variants take the same arguments, `(controlled_power, t, num_target, prepare_target=None)`:
+
+- `controlled_power(j)` returns a circuit on 1 + num_target qubits, control first (qubit 0, as in M5), that implements controlled-U^(2^j).
+- `prepare_target`, if given, is a circuit applied to the target register first (X on its qubit 0 to get |1⟩).
+
+**M3a, textbook QPE.** `qpe_circuit(...)`:
 
 - Counting register of t qubits, each prepared with H.
 - Counting qubit j controls U^(2^j) on the target register.
 - Apply `qft(t, inverse=True)` (with swaps) to the counting register and measure it; the little-endian integer is y.
 
-**M3b, iterative QPE.** One control qubit, t rounds. In round k = 0, …, t−1:
+**M3b, iterative QPE.** `iterative_qpe_circuit(...)`. One control qubit, one t-bit classical register m, t rounds. In round k = 0, …, t−1:
 
 1. Reset the control and apply H.
 2. Apply controlled-U^(2^(t−1−k)).
-3. Apply the phase P(−2π · Σ_{j<k} m_j / 2^(k−j+1)) to the control, conditioned on the earlier outcomes m_j (`if_test`).
+3. For each j < k, inside `with qc.if_test((m[j], 1)):` apply P(−2π / 2^(k−j+1)) to the control. Together these apply P(−2π · Σ_{j<k} m_j / 2^(k−j+1)). A gate angle cannot depend on a measured bit at run time, so it has to be one `if_test` per earlier bit (190 of them at t = 20, which Aer handles without trouble).
 4. Apply H and measure into classical bit m_k.
 
-The estimate is y = Σ_k m_k 2^k. Round 0 measures the least significant phase bit.
+The estimate is y = Σ_k m_k 2^k = `int(memory_string, 2)`. Round 0 measures the least significant phase bit.
+
+Put the angle arithmetic in a helper `correction_angle(k, bits)` and test it here: M5 runs the same rounds without this circuit and reuses it.
 
 Exit tests, with U = P(2πφ) acting on |1⟩:
 
 1. φ = 5/16, t = 4: both variants return y = 5 with probability 1.
 2. φ = 1/3, t = 6: the nearest estimate y = 21 has probability ≥ 4/π² ≈ 0.405.
-3. The sampled distribution of M3b matches the exact distribution of M3a for φ = 1/3.
+3. For φ = 1/3, t = 6, the histogram of 4000 shots of M3b is within total variation distance 0.05 of the exact M3a probabilities (from `Statevector`, final measurements removed). Sampling noise alone gives about 0.02, and at most 0.03 in 99.9% of runs.
 
 Concept check: show that the round-k correction phase is exactly what the inverse QFT would have applied to that qubit.
 
 ### M4 — First factoring: N = 15
 
-- In `oracles.py`, build controlled-U_a on 4 qubits for a ∈ {2, 4, 7, 8, 11, 13, 14} from SWAP and X gates. Hint: multiplying by 2 mod 15 is a cyclic rotation of the 4 bits, and multiplying by −1 mod 15 is a bitwise NOT.
+- In `oracles.py`, build controlled-U_a (a control plus 4 target qubits) for a ∈ {2, 4, 7, 8, 11, 13, 14} from CSWAP and CX gates. Hint: multiplying by 2 mod 15 is a cyclic rotation of the 4 bits, and multiplying by −1 mod 15 is a bitwise NOT. The bases 2, 4, 8 need rotations only; 14, 13, 11, 7 are a rotation followed by NOT.
+- The powers are U^(2^j) = U_{a^(2^j) mod 15}, and a^(2^j) mod 15 is always a, 4 or 1; U_1 is the identity.
 - Run textbook QPE with t = 8 on the target state |1⟩ (12 qubits total).
+- Add `find_order_15(a, N, shots=10, seed=None)` to `order_finding.py`: sample this circuit and post-process with M1.
 
 Exit tests:
 
 1. Each U_a maps |y⟩ to |a·y mod 15⟩ for y = 1, …, 14.
-2. For a = 7, the measured y is 0, 64, 128 or 192, each with probability 1/4. For each of the seven bases, the only outcomes are the multiples of 256 / r. This is the test that shows the circuit works.
+2. For a = 7, the measured y is 0, 64, 128 or 192, each with probability exactly 1/4 (computed with `Statevector`, final measurements removed). For each of the seven bases, the only outcomes are the multiples of 256 / r. This is the test that shows the circuit works.
 3. The order returned agrees with `classical_order` for each of the seven bases, and `shor_factor(15, …)` returns 3 × 5 when the base is fixed to a = 7 and the order finder is confirmed to have been called. On its own this test proves little at N = 15 (see M1).
 
 ### M5 — Oracle order finding for N ≤ 1000
@@ -156,62 +166,68 @@ Exit tests:
 
 This oracle is tabulated classically, so it validates QPE and post-processing; it is not a scalable circuit.
 
+M5 does not run the M3b circuit: `Statevector` cannot execute `if_test`. It runs the M3b rounds in a Python loop on a `Statevector` and takes the correction angle from `correction_angle(k, bits)` of M3. After each round, continue from the state that the measurement returns, `outcome, sv = sv.measure([0])`, and apply X to the control if the outcome was 1. Discarding that state and letting a reset re-sample the control loses the correlation with the target: in a prototype the fraction of shots next to a peak fell from 0.90 to 0.28.
+
 Known pitfalls (hit during prototyping):
 
-- `UnitaryGate(P).control()` fails in Aer with "unknown instruction: c-unitary". Build the controlled matrix directly.
+- `UnitaryGate(P).control()` fails untranspiled in Aer with "unknown instruction: c-unitary". Transpiling synthesises the whole unitary into elementary gates (236 CX already at 4 target qubits), which is infeasible at n = 10. Build the controlled matrix directly.
 - Twenty dense 2048×2048 matrices in one Aer circuit exceeded 7 GB at n = 10 (2.5 GB at n = 9). Simulate round by round with `Statevector.evolve` and `Statevector.measure` instead; that used 0.22 GB.
+- Speed, optional: evolving with the dense matrix costs 0.2–0.3 s per shot at n = 10, so exit test 3 takes one to two minutes and exit test 2 several. Applying the permutation to the amplitude array with numpy indexing instead took 0.003 s per shot in a prototype.
 
 Exit tests:
 
 1. N = 989, a = 2 returns r = 154 and the factors 23 × 43.
 2. `shor_factor` with this order finder factors every valid N ≤ 100 and a random sample of 50 valid N in (100, 1000], offering only bases coprime to N so that the order finder is called for every N.
-3. Distribution: for N = 35, a = 2 (r = 12) and for N = 989, a = 2, at least 75% of 400 measured y are one of the two integers next to a peak s·2^t / r (theory: at least 8/π² ≈ 81%), and for N = 35 all 12 values of s occur.
+3. Distribution: for N = 35, a = 2 (r = 12) and for N = 989, a = 2, at least 75% of 400 measured y are one of the two integers next to a peak s·2^t / r (theory: at least 8/π² ≈ 81%; the exact value is 90.3% for both), and for N = 35 all 12 values of s occur.
 
 Concept check: for r = 154, which eigenphases s/r yield a candidate smaller than r, and what fraction of shots return r exactly?
 
 ### M6 — Reversible modular arithmetic
 
-Registers: control c (1), x (n), b (n+1, the extra qubit catches overflow), ancilla (1). All adders act on b in the Fourier basis of the no-swap QFT from M2. Build and test bottom-up in `arithmetic.py`.
+Registers: control c (1), x (n), b (n+1, the extra qubit catches overflow), ancilla (1). All adders act on b in the Fourier basis of the no-swap QFT from M2: every "QFT" in this milestone means `qft(n+1, do_swaps=False)` on b, and every "inverse QFT" means `qft(n+1, do_swaps=False, inverse=True)`. The default swap version breaks every case. Build and test bottom-up in `arithmetic.py`.
 
 **M6a, φADD(a).** Add a classical constant: apply P(2π·a / 2^(j+1)) to qubit j of b. Subtraction is the inverse. Provide singly and doubly controlled versions (`cp`, `mcp`).
 
 **M6b, φADD(a) mod N** with two controls, valid for a, b < N:
 
 1. Doubly controlled φADD(a).
-2. Inverse φADD(N).
+2. Inverse φADD(N), uncontrolled.
 3. Inverse QFT; CNOT from b's top qubit to the ancilla; QFT.
 4. φADD(N) controlled by the ancilla.
 5. Inverse doubly controlled φADD(a).
 6. Inverse QFT; X on b's top qubit; CNOT from it to the ancilla; X again; QFT.
 7. Doubly controlled φADD(a).
 
-Steps 5–7 uncompute the ancilla. This is the hardest block of the project.
+Only the three φADD(a) gates (steps 1, 5, 7) are doubly controlled. Steps 2, 3 and 6 are uncontrolled, and step 4 is controlled by the ancilla only. With the controls off, steps 2–6 must cancel on their own; controlling step 2 as well passes every test with the controls on and fails every case with them off. Steps 5–7 uncompute the ancilla. This is the hardest block of the project.
 
 **M6c, CMULT(a) mod N.** QFT on b; for i = 0, …, n−1 apply φADD(2^i·a mod N) mod N controlled by c and x_i; inverse QFT. Effect: |x⟩|b⟩ → |x⟩|b + a·x mod N⟩ when c = 1.
 
 **M6d, controlled-U_a.** CMULT(a); controlled-SWAP between x and the low n qubits of b; inverse of CMULT(a⁻¹ mod N). Effect: |x⟩|0⟩ → |a·x mod N⟩|0⟩ when c = 1, identity when c = 0.
 
-Exit tests, exhaustive over basis states with `Statevector` for N = 5, 7 and 15:
+Exit tests, exhaustive over basis states with `Statevector` for N = 5, 7 and 15. In each, check that the output is the expected basis state with amplitude 1 to within 1e-9, phase included; a probability check misses stray phases (for example from `crz` used in place of `cp`). M6a and M6b act in the Fourier basis, so wrap them in the no-swap QFT and its inverse on b for the test.
 
-1. M6a: b → b + a mod 2^(n+1), with and without controls set.
-2. M6b: b → (a + b) mod N for all a, b < N; the ancilla and b's top qubit return to 0.
-3. M6c: correct for all x, b < N.
+1. M6a: b → b + a mod 2^(n+1) for every a < 2^(n+1), for the uncontrolled version and for the controlled versions with all controls 1; b unchanged when any control is 0.
+2. M6b: b → (a + b) mod N for all a, b < N when both controls are 1, and b unchanged for the other three control settings. In every case the ancilla and b's top qubit return to 0.
+3. M6c: |x⟩|b⟩ → |x⟩|b + a·x mod N⟩ for all x, b < N when c = 1, and unchanged when c = 0.
 4. M6d: x → a·x mod N for all x < N and every a coprime to N; b and the ancilla return to 0; identity when c = 0.
+
+The exhaustive tests are slow with `Statevector`: about 3.5 minutes in total in a prototype, of which M6c at N = 15 over all eight bases took 141 s. Mark the N = 15 cases with a `slow` pytest marker, or run M6c at N = 15 for two bases only.
 
 Concept check: why does the ancilla have to be uncomputed, and what would go wrong in QPE if it were left entangled?
 
 ### M7 — Full Shor for N ≤ 50
 
-- `find_order_arith(a, N, shots=10, seed=None)` and `sample_phases_arith(a, N, shots, seed=None)`: M3b with the controlled-U_a of M6d, on 2n+3 qubits. Same signatures and batching as the oracle versions in M5.
-- Run on `AerSimulator(method="statevector")`, transpiled with `optimization_level=0`, `memory=True`.
+- `find_order_arith(a, N, shots=10, seed=None)` and `sample_phases_arith(a, N, shots, seed=None)`: `iterative_qpe_circuit` of M3b with the controlled-U_a of M6d, on 2n+3 qubits: num_target = 2n+2 (x, b, ancilla), and `prepare_target` is X on x_0. Same signatures, batching and seeding as the oracle versions in M5.
+- Run on `AerSimulator(method="statevector")`, transpiled with `optimization_level=0`, `memory=True`. Resets, mid-circuit measurements and `if_test` all run natively.
+- Speed, optional: `shot_branching_enable=True` ran 400 shots at N = 21 in 1.5 s instead of 17 s with an identical histogram. Its memory comes back grouped by outcome, so shuffle it with the seeded rng before splitting it into batches.
 
 Exit tests:
 
 1. For N = 15 and 21, the order returned agrees with `classical_order` for every a coprime to N in 2..N−2. Fix the simulator seed so the test is repeatable.
 2. `shor_factor` factors each of 15, 21, 33, 35, 39, 45, offering only bases coprime to N so that the order finder is called.
-3. For N = 21, a = 2 (r = 6), the y-histogram from `sample_phases_arith` matches `sample_phases_oracle`, and at least 75% of the shots are next to a peak. This is the test that shows the arithmetic circuit works; tests 1 and 2 would pass with a mediocre circuit at these sizes.
+3. For N = 21, a = 2 (r = 6, t = 10), take 400 shots from `sample_phases_arith` with a fixed seed. At least 75% are next to a peak (theory 90.3%). Assign every shot to its nearest peak, s = round(y·r / 2^t) mod r; each of the 6 values of s receives 1/6 ± 0.07 of the shots. Apply the same two checks to 400 shots of `sample_phases_oracle`. Do not compare the raw 1024-bin histograms: two 400-shot samples of the same distribution differ by a total variation distance of about 0.13. This is the test that shows the arithmetic circuit works; tests 1 and 2 would pass with a mediocre circuit at these sizes.
 
-Reference numbers (a = 2): N = 15 uses 11 qubits and 6.0k gates; N = 21 uses 13 qubits and 12.3k gates; N = 33–45 use 15 qubits and about 22.7k gates at roughly 1.3 s per shot. For r = 12 only about a third of shots give r directly, so the lcm step from M1 matters.
+Reference numbers (a = 2): N = 15 uses 11 qubits and 6.0k gates; N = 21 uses 13 qubits and 12.3k gates; N = 33–45 use 15 qubits and about 22.7k gates at roughly 1.3 s per shot. For r = 12 only about a third of shots give r directly, so the lcm step from M1 matters. Test costs: N = 21 runs at about 0.05 s per shot, so test 3 takes about 17 s; test 2 takes roughly a minute. A 400-shot distribution test at n = 6 would take 8–9 minutes, so do not add one without shot branching.
 
 ### M8 — Analysis and optional extensions
 
@@ -219,8 +235,8 @@ Pick any; none is required for the primary target.
 
 1. **Scaling:** tabulate qubits, gate count and depth against n; compare with the expected polynomial growth. Also transpile to {cx, rz, sx, x} and count CNOTs (N = 989 gave about 265k CNOTs at depth 240k).
 2. **Capstone:** run full arithmetic at N = 143 or 323; N near 1000 is an overnight job.
-3. **Approximate QFT:** drop small rotations in M2 and measure the effect on success probability.
-4. **Noise:** add an Aer depolarising noise model and find the error rate at which N = 15 stops working.
+3. **Approximate QFT:** the primary path (M3b) contains no QFT circuit, so apply the cut in both places it has an effect: in M3b skip the corrections with k−j+1 > d, and in M6 drop rotations smaller than 2π / 2^d in the adders' QFTs and in φADD. Plot the success probability against d.
+4. **Noise:** add an Aer depolarising noise model and find the error rate at which N = 15 stops working, using M4's U_a with iterative QPE on 5 qubits (the circuit of item 5).
 5. **Hardware:** run a compiled N = 15 circuit (M4's U_a with iterative QPE) on an IBM device and compare with the noise model. This demonstrates QPE on hardware, not scalable factoring, because the compiled U_a uses knowledge of the problem's structure.
 
 ## 6. Working through this plan with Claude Code
@@ -237,4 +253,4 @@ Pick any; none is required for the primary target.
 - T. Draper, "Addition on a Quantum Computer", arXiv:quant-ph/0008033.
 - S. Beauregard, "Circuit for Shor's algorithm using 2n+3 qubits", arXiv:quant-ph/0205095.
 - R. Griffiths and C.-S. Niu, "Semiclassical Fourier Transform for Quantum Computation", arXiv:quant-ph/9511007.
-- J. Smolin, G. Smith and A. Vargo, "Oversimplifying quantum factoring", arXiv:1301.7007 (on compiled hardware demonstrations).
+- J. Smolin, G. Smith and A. Vargo, "Oversimplifying quantum factoring", Nature 499, 163 (2013); arXiv:1301.7007, where it is titled "Pretending to factor large numbers on a quantum computer" (on compiled hardware demonstrations).
