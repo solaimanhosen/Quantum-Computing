@@ -46,10 +46,12 @@ shor/
   __init__.py        # conventions (bit order, QFT definition, notation)
   classical.py       # M1: order, prime-power check, continued fractions
   factor.py          # M1: shor_factor driver, takes any order finder
+main.py              # command-line entry point: python main.py N
 tests/
   test_smoke.py      # M0: Bell circuit on AerSimulator
   test_classical.py  # M1
   test_factor.py     # M1
+  test_main.py       # main.py
 experiments/         # M8 scripts and results (empty for now)
 pytest.ini           # test discovery; puts the project root on the import path
 requirements.txt
@@ -79,13 +81,30 @@ pytest -k order_from                  # tests whose name matches
 pytest -v                             # list each test
 ```
 
-The suite currently has 88 tests and runs in about three seconds. Each milestone ends with an exit test from the plan; the next milestone does not start until it passes.
+The suite currently has 117 tests and runs in about three seconds. Each milestone ends with an exit test from the plan; the next milestone does not start until it passes.
 
 ## Running the project
 
-There is no command-line entry point yet; the code is used from Python. Start `python` from the project root with the virtual environment active.
+With the virtual environment active, run `main.py` from the project root:
 
-Factor a number, using the classical order finder:
+```bash
+python main.py 989              # random bases, different each run
+python main.py 989 --seed 1     # repeatable
+python main.py --help
+```
+
+It prints each base it tries, the order found and what the driver does with it:
+
+```
+Factoring N = 21 (n = 5 bits)
+Order finder: classical (brute-force classical order finder, no quantum circuit)
+  a = 10: order r = 6, a^(r/2) ≡ 13 (mod N), gcd(13 ± 1, N) = 3 and 7
+21 = 3 × 7
+```
+
+`--method` selects the order finder. Only `classical` exists so far; the quantum order finders of M4, M5 and M7 will be added to `ORDER_FINDERS` in `main.py` as they are built.
+
+The same functions can be called from Python. Factor a number, using the classical order finder:
 
 ```python
 import random
