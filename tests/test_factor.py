@@ -6,31 +6,9 @@ from math import gcd
 import numpy as np
 import pytest
 
+from helpers import CountingOrder, FixedBases
 from shor.classical import classical_order
 from shor.factor import shor_factor
-
-
-class FixedBases:
-    """Stands in for the rng so a test can choose the bases a that get tried."""
-
-    def __init__(self, *bases):
-        self._bases = iter(bases)
-
-    def randrange(self, start, stop):
-        a = next(self._bases)
-        assert start <= a < stop
-        return a
-
-
-class CountingOrder:
-    """classical_order that records the bases it was asked about."""
-
-    def __init__(self):
-        self.calls = []
-
-    def __call__(self, a, N):
-        self.calls.append(a)
-        return classical_order(a, N)
 
 
 def is_valid_input(N):

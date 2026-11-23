@@ -2,24 +2,40 @@
 
     python main.py 989
     python main.py 21 --seed 3
-    python main.py 989 --method classical
+    python main.py 15 --method n15
 
-Only the classical order finder exists so far (milestone M1). The quantum
-order finders of M4, M5 and M7 are added to ORDER_FINDERS as they are built.
+Order finders (--method):
+  classical  brute force, no quantum circuit; any valid N (milestone M1)
+  n15        textbook phase estimation with hand-built multipliers on a
+             simulator; N = 15 only (milestone M4)
+The order finders of M5 and M7 are added to ORDER_FINDERS as they are built.
 """
 
 import argparse
 import random
 import sys
+from functools import partial
 from math import gcd
+
+import numpy as np
 
 from shor.classical import classical_order
 from shor.factor import shor_factor
+from shor.order_finding import find_order_15
 
-# name -> (find_order, description). Every finder can be called as
-# find_order(a, N) and returns the order of a mod N or None (plan section 3).
+# name -> (make_finder, description). make_finder(seed) returns a function
+# find_order(a, N) that gives the order of a mod N or None (plan section 3).
+# The quantum finders draw all their shots from one generator, so a run is
+# repeatable with --seed and successive calls still get different shots.
 ORDER_FINDERS = {
-    "classical": (classical_order, "brute-force classical order finder, no quantum circuit"),
+    "classical": (
+        lambda seed: classical_order,
+        "brute-force classical order finder, no quantum circuit",
+    ),
+    "n15": (
+        lambda seed: partial(find_order_15, seed=np.random.default_rng(seed)),
+        "textbook phase estimation on 12 simulated qubits, hand-built multipliers, N = 15 only",
+    ),
 }
 
 def describe_order(a, r, N):
@@ -60,11 +76,14 @@ def main(argv=None):
         default="classical",
         help="order finder to use (default: classical)",
     )
-    parser.add_argument("--seed", type=int, default=None, help="seed for the random bases; omit for a different run each time")
+    parser.add_argument("--seed", type=int, default=None, help="seed for the random bases and the simulator; omit for a different run each time")
     args = parser.parse_args(argv)
 
-    find_order, description = ORDER_FINDERS[args.method]
+    make_finder, description = ORDER_FINDERS[args.method]
+    find_order = make_finder(args.seed)
     N = args.N
+    if args.method == "n15" and N != 15:
+        parser.error("--method n15 only factors N = 15")
     print(f"Factoring N = {N} (n = {N.bit_length()} bits)")
     print(f"Order finder: {args.method} ({description})")
 

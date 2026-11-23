@@ -11,14 +11,14 @@ The full design, build order and exit tests are in [SHOR_IMPLEMENTATION_PLAN.md]
 | M0 | Project setup, conventions | Done |
 | M1 | Classical shell: number theory, continued fractions, factor driver | Done |
 | M2 | QFT and inverse QFT | Done |
-| M3 | Quantum phase estimation (textbook and iterative) | Textbook (M3a) done; iterative (M3b) not started |
-| M4 | First end-to-end factoring: N = 15 | Not started |
+| M3 | Quantum phase estimation (textbook and iterative) | Textbook (M3a) done; iterative (M3b) postponed until after M4 |
+| M4 | First end-to-end factoring: N = 15 | Done |
 | M5 | Oracle order finding for N ≤ 1000 | Not started |
 | M6 | Reversible modular arithmetic (Draper / Beauregard) | Not started |
 | M7 | Full Shor for N ≤ 50 | Not started |
 | M8 | Analysis and optional extensions | Not started |
 
-The classical half, the QFT and textbook phase estimation exist so far. Factoring already works end to end, but with a brute-force classical order finder standing in for the quantum one; the first quantum order finder arrives with M4.
+Factoring N = 15 now runs end to end on a simulated quantum circuit: textbook phase estimation on 12 qubits with multipliers built by hand for that one number. For any other N the order is still found by classical brute force; the general quantum order finders come with M5 and M7, and both need the iterative phase estimation of M3b first.
 
 ## Environment setup
 
@@ -48,6 +48,8 @@ shor/
   factor.py          # M1: shor_factor driver, takes any order finder
   qft.py             # M2: QFT and inverse QFT, with and without swaps
   qpe.py             # M3: textbook phase estimation (iterative still to come)
+  oracles.py         # M4: controlled multiplication by a mod 15
+  order_finding.py   # M4: find_order_15, batching of shots
 main.py              # command-line entry point: python main.py N
 tests/
   test_smoke.py      # M0: Bell circuit on AerSimulator
@@ -55,7 +57,10 @@ tests/
   test_factor.py     # M1
   test_qft.py        # M2
   test_qpe.py        # M3
+  test_oracles.py    # M4
+  test_order_finding.py  # M4
   test_main.py       # main.py
+  helpers.py         # test doubles shared by the test files
 experiments/         # M8 scripts and results (empty for now)
 pytest.ini           # test discovery; puts the project root on the import path
 requirements.txt
@@ -68,9 +73,9 @@ Modules still to come, one per milestone:
 
 | File | Milestone | Contents |
 |---|---|---|
-| `shor/oracles.py` | M4, M5 | N = 15 circuits, permutation oracle |
+| `shor/oracles.py` (additions) | M5 | Permutation oracle for general N |
 | `shor/arithmetic.py` | M6 | Fourier-space adders, modular multiplier, controlled-U_a |
-| `shor/order_finding.py` | M5, M7 | `find_order_oracle`, `find_order_arith` |
+| `shor/order_finding.py` (additions) | M5, M7 | `find_order_oracle`, `find_order_arith` |
 
 ## Running the tests
 
@@ -83,15 +88,16 @@ pytest -k order_from                  # tests whose name matches
 pytest -v                             # list each test
 ```
 
-The suite currently has 204 tests and runs in about four seconds. Each milestone ends with an exit test from the plan; the next milestone does not start until it passes.
+The suite currently has 310 tests and runs in about five seconds. Each milestone ends with an exit test from the plan; the next milestone does not start until it passes.
 
 ## Running the project
 
 With the virtual environment active, run `main.py` from the project root:
 
 ```bash
-python main.py 989              # random bases, different each run
-python main.py 989 --seed 1     # repeatable
+python main.py 989                        # classical order finder, random bases
+python main.py 989 --seed 1               # repeatable
+python main.py 15 --method n15 --seed 2   # quantum order finder for N = 15
 python main.py --help
 ```
 
@@ -104,7 +110,14 @@ Order finder: classical (brute-force classical order finder, no quantum circuit)
 21 = 3 × 7
 ```
 
-`--method` selects the order finder. Only `classical` exists so far; the quantum order finders of M4, M5 and M7 will be added to `ORDER_FINDERS` in `main.py` as they are built.
+`--method` selects the order finder:
+
+| Method | What it runs | Valid N |
+|---|---|---|
+| `classical` (default) | Brute-force order, no quantum circuit | any valid N |
+| `n15` | Textbook phase estimation on a 12-qubit simulated circuit, 10 shots per batch | 15 only |
+
+For N = 15 half of the random bases share a factor with 15, and then no order finding is needed and the circuit never runs. `--seed 2` picks a = 2, which does go through the circuit. The order finders of M5 and M7 will be added to `ORDER_FINDERS` in `main.py` as they are built.
 
 The QFT of M2 is a circuit builder rather than something to run on its own:
 
@@ -144,7 +157,7 @@ from shor.factor import shor_factor
 shor_factor(989, classical_order, random.Random(1))   # (23, 43)
 ```
 
-`shor_factor(N, find_order, rng)` accepts any function `find_order(a, N)` that returns the order of a mod N, or `None` on failure. The quantum order finders from M4, M5 and M7 will take extra parameters such as `shots`, with defaults so that they can be passed in the same way. If a finder returns a wrong value or a multiple of the order, the driver notices and tries another base.
+`shor_factor(N, find_order, rng)` accepts any function `find_order(a, N)` that returns the order of a mod N, or `None` on failure. The quantum order finders take extra parameters such as `shots` and `seed`, with defaults so that they can be passed in the same way: `shor_factor(15, find_order_15, random.Random(2))` with `find_order_15` from `shor.order_finding`. If a finder returns a wrong value or a multiple of the order, the driver notices and tries another base.
 
 Valid inputs are odd composites that are not prime powers (15, 21, 33, 35, 39, 45, …). Anything else raises `ValueError`.
 

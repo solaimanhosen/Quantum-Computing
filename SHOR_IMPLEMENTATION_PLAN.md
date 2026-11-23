@@ -63,7 +63,7 @@ requirements.txt
 
 ## 5. Milestones
 
-Each milestone ends with an exit test. Do not start the next milestone until it passes.
+Each milestone ends with an exit test. Do not start the next milestone until it passes. One agreed exception (2026-11-23): M3b is postponed and M4 was built first, since M4 uses only the textbook circuit of M3a. M3b and its exit test 3 must be done before M5.
 
 ### M0 — Setup
 
@@ -156,6 +156,7 @@ Concept check: show that the round-k correction phase is exactly what the invers
 - The powers are U^(2^j) = U_{a^(2^j) mod 15}, and a^(2^j) mod 15 is always a, 4 or 1; U_1 is the identity.
 - Run textbook QPE with t = 8 on the target state |1⟩ (12 qubits total).
 - Add `find_order_15(a, N, shots=10, seed=None)` to `order_finding.py`: sample this circuit and post-process with M1.
+- `order_from_batches(sample, t, a, N)` in `order_finding.py` holds the batching rule (up to three batches for the same base, all shots post-processed together). `find_order_15` uses it, and the finders of M5 and M7 reuse it.
 
 Exit tests:
 

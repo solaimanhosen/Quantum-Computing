@@ -41,9 +41,35 @@ def test_unknown_method_is_rejected():
 
 
 def test_every_registered_finder_is_callable_as_find_order():
-    for find_order, description in ORDER_FINDERS.values():
+    assert set(ORDER_FINDERS) == {"classical", "n15"}
+    for make_finder, description in ORDER_FINDERS.values():
+        find_order = make_finder(3)
         assert find_order(7, 15) == 4
         assert description
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_n15_method_factors_15(seed, capsys):
+    assert main(["15", "--method", "n15", "--seed", str(seed)]) == 0
+    out = capsys.readouterr().out
+    assert "Order finder: n15" in out
+    assert out.strip().endswith("15 = 3 × 5")
+
+
+def test_n15_method_is_repeatable_with_a_seed(capsys):
+    main(["15", "--method", "n15", "--seed", "4"])
+    first = capsys.readouterr().out
+    main(["15", "--method", "n15", "--seed", "4"])
+    assert capsys.readouterr().out == first
+
+
+def test_n15_method_rejects_other_N(capsys):
+    # Checked up front: a lucky base would otherwise factor 21 without ever
+    # reaching the order finder that cannot handle it.
+    with pytest.raises(SystemExit) as exit_info:
+        main(["21", "--method", "n15"])
+    assert exit_info.value.code == 2
+    assert "only factors N = 15" in capsys.readouterr().err
 
 
 def test_describe_order_cases():
