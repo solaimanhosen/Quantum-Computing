@@ -10,7 +10,7 @@ The full design, build order and exit tests are in [SHOR_IMPLEMENTATION_PLAN.md]
 |---|---|---|
 | M0 | Project setup, conventions | Done |
 | M1 | Classical shell: number theory, continued fractions, factor driver | Done |
-| M2 | QFT and inverse QFT | Not started |
+| M2 | QFT and inverse QFT | Done |
 | M3 | Quantum phase estimation (textbook and iterative) | Not started |
 | M4 | First end-to-end factoring: N = 15 | Not started |
 | M5 | Oracle order finding for N ≤ 1000 | Not started |
@@ -18,7 +18,7 @@ The full design, build order and exit tests are in [SHOR_IMPLEMENTATION_PLAN.md]
 | M7 | Full Shor for N ≤ 50 | Not started |
 | M8 | Analysis and optional extensions | Not started |
 
-Only the classical half exists so far. Factoring already works end to end, but with a brute-force classical order finder standing in for the quantum one.
+The classical half and the QFT exist so far. Factoring already works end to end, but with a brute-force classical order finder standing in for the quantum one; the QFT is not yet used by it.
 
 ## Environment setup
 
@@ -46,11 +46,13 @@ shor/
   __init__.py        # conventions (bit order, QFT definition, notation)
   classical.py       # M1: order, prime-power check, continued fractions
   factor.py          # M1: shor_factor driver, takes any order finder
+  qft.py             # M2: QFT and inverse QFT, with and without swaps
 main.py              # command-line entry point: python main.py N
 tests/
   test_smoke.py      # M0: Bell circuit on AerSimulator
   test_classical.py  # M1
   test_factor.py     # M1
+  test_qft.py        # M2
   test_main.py       # main.py
 experiments/         # M8 scripts and results (empty for now)
 pytest.ini           # test discovery; puts the project root on the import path
@@ -64,7 +66,6 @@ Modules still to come, one per milestone:
 
 | File | Milestone | Contents |
 |---|---|---|
-| `shor/qft.py` | M2 | QFT and inverse QFT, with and without swaps |
 | `shor/qpe.py` | M3 | Textbook and iterative phase estimation |
 | `shor/oracles.py` | M4, M5 | N = 15 circuits, permutation oracle |
 | `shor/arithmetic.py` | M6 | Fourier-space adders, modular multiplier, controlled-U_a |
@@ -81,7 +82,7 @@ pytest -k order_from                  # tests whose name matches
 pytest -v                             # list each test
 ```
 
-The suite currently has 117 tests and runs in about three seconds. Each milestone ends with an exit test from the plan; the next milestone does not start until it passes.
+The suite currently has 173 tests and runs in about three seconds. Each milestone ends with an exit test from the plan; the next milestone does not start until it passes.
 
 ## Running the project
 
@@ -103,6 +104,15 @@ Order finder: classical (brute-force classical order finder, no quantum circuit)
 ```
 
 `--method` selects the order finder. Only `classical` exists so far; the quantum order finders of M4, M5 and M7 will be added to `ORDER_FINDERS` in `main.py` as they are built.
+
+The QFT of M2 is a circuit builder rather than something to run on its own:
+
+```python
+from shor.qft import qft
+
+print(qft(3))                                    # H, controlled-phase and SWAP gates
+print(qft(3, do_swaps=False, inverse=True))      # inverse of the no-swap form
+```
 
 The same functions can be called from Python. Factor a number, using the classical order finder:
 
