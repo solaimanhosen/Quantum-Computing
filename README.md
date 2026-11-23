@@ -11,14 +11,14 @@ The full design, build order and exit tests are in [SHOR_IMPLEMENTATION_PLAN.md]
 | M0 | Project setup, conventions | Done |
 | M1 | Classical shell: number theory, continued fractions, factor driver | Done |
 | M2 | QFT and inverse QFT | Done |
-| M3 | Quantum phase estimation (textbook and iterative) | Not started |
+| M3 | Quantum phase estimation (textbook and iterative) | Textbook (M3a) done; iterative (M3b) not started |
 | M4 | First end-to-end factoring: N = 15 | Not started |
 | M5 | Oracle order finding for N ≤ 1000 | Not started |
 | M6 | Reversible modular arithmetic (Draper / Beauregard) | Not started |
 | M7 | Full Shor for N ≤ 50 | Not started |
 | M8 | Analysis and optional extensions | Not started |
 
-The classical half and the QFT exist so far. Factoring already works end to end, but with a brute-force classical order finder standing in for the quantum one; the QFT is not yet used by it.
+The classical half, the QFT and textbook phase estimation exist so far. Factoring already works end to end, but with a brute-force classical order finder standing in for the quantum one; the first quantum order finder arrives with M4.
 
 ## Environment setup
 
@@ -47,12 +47,14 @@ shor/
   classical.py       # M1: order, prime-power check, continued fractions
   factor.py          # M1: shor_factor driver, takes any order finder
   qft.py             # M2: QFT and inverse QFT, with and without swaps
+  qpe.py             # M3: textbook phase estimation (iterative still to come)
 main.py              # command-line entry point: python main.py N
 tests/
   test_smoke.py      # M0: Bell circuit on AerSimulator
   test_classical.py  # M1
   test_factor.py     # M1
   test_qft.py        # M2
+  test_qpe.py        # M3
   test_main.py       # main.py
 experiments/         # M8 scripts and results (empty for now)
 pytest.ini           # test discovery; puts the project root on the import path
@@ -66,7 +68,6 @@ Modules still to come, one per milestone:
 
 | File | Milestone | Contents |
 |---|---|---|
-| `shor/qpe.py` | M3 | Textbook and iterative phase estimation |
 | `shor/oracles.py` | M4, M5 | N = 15 circuits, permutation oracle |
 | `shor/arithmetic.py` | M6 | Fourier-space adders, modular multiplier, controlled-U_a |
 | `shor/order_finding.py` | M5, M7 | `find_order_oracle`, `find_order_arith` |
@@ -82,7 +83,7 @@ pytest -k order_from                  # tests whose name matches
 pytest -v                             # list each test
 ```
 
-The suite currently has 173 tests and runs in about three seconds. Each milestone ends with an exit test from the plan; the next milestone does not start until it passes.
+The suite currently has 204 tests and runs in about four seconds. Each milestone ends with an exit test from the plan; the next milestone does not start until it passes.
 
 ## Running the project
 
@@ -112,6 +113,25 @@ from shor.qft import qft
 
 print(qft(3))                                    # H, controlled-phase and SWAP gates
 print(qft(3, do_swaps=False, inverse=True))      # inverse of the no-swap form
+```
+
+Phase estimation (M3) takes the unitary as a function that returns controlled-U^(2^j). Estimating the phase 5/16 of a phase gate with 4 bits:
+
+```python
+from math import pi
+from qiskit import QuantumCircuit
+from shor.qpe import qpe_circuit, measure_phases
+
+def controlled_power(j):                 # controlled-U^(2^j) for U = P(2π·5/16)
+    qc = QuantumCircuit(2)               # qubit 0 is the control
+    qc.cp(2 * pi * (5 / 16) * 2**j, 0, 1)
+    return qc
+
+prepare = QuantumCircuit(1)
+prepare.x(0)                             # the eigenstate |1>
+
+circuit = qpe_circuit(controlled_power, 4, 1, prepare)
+measure_phases(circuit, shots=5, seed=1)     # [5, 5, 5, 5, 5], and 5 / 2^4 = 5/16
 ```
 
 The same functions can be called from Python. Factor a number, using the classical order finder:

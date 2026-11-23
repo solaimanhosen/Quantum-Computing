@@ -126,6 +126,11 @@ Both variants take the same arguments, `(controlled_power, t, num_target, prepar
 - Counting qubit j controls U^(2^j) on the target register.
 - Apply `qft(t, inverse=True)` (with swaps) to the counting register and measure it; the little-endian integer is y.
 
+Two helpers in `qpe.py` are shared with later milestones:
+
+- `exact_phase_distribution(circuit, t)`: the exact P(y) of a textbook circuit, from `Statevector` with the final measurements removed. It does not apply to M3b, which measures mid-circuit.
+- `measure_phases(circuit, shots, seed=None)`: run either variant on Aer and return the measured y of each shot as Python ints, following the seeding rule of section 3. The exact distribution bypasses the measurements, so at least one test per circuit must go through this function to check the wiring of the classical bits.
+
 **M3b, iterative QPE.** `iterative_qpe_circuit(...)`. One control qubit, one t-bit classical register m, t rounds. In round k = 0, …, t−1:
 
 1. Reset the control and apply H.
