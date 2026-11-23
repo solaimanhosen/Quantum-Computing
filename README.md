@@ -53,6 +53,8 @@ tests/
 experiments/         # M8 scripts and results (empty for now)
 pytest.ini           # test discovery; puts the project root on the import path
 requirements.txt
+LICENSE              # Apache-2.0
+NOTICE               # copyright notice
 SHOR_IMPLEMENTATION_PLAN.md
 ```
 
@@ -137,6 +139,10 @@ To keep the qubit count this low, order finding uses iterative phase estimation 
 - **Evidence:** a correct factorisation is weak evidence that a circuit works, because a random base often shares a factor with a small N and the classical checks are forgiving. Each quantum milestone is tested on its measured distribution as well.
 
 Section 3 of the plan has the full list, including the exact QFT definition.
+
+## License
+
+Copyright 2026 Md Solaiman Hosen. Licensed under the [Apache License, Version 2.0](LICENSE); see also [NOTICE](NOTICE).
 
 ## References
 
