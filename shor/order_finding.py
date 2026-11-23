@@ -12,18 +12,29 @@ the denominator r / gcd(s, r) from y, and a few shots together give r.
 Every finder can be called as find_order(a, N) and returns a Python int or
 None (plan section 3), so it can be passed to shor_factor.
 
-So far: M4, the order finder for N = 15. M5 and M7 add the general ones.
+So far:
+  - M4: find_order_15, with multipliers built from gates, for N = 15.
+  - First half of M5: find_order_oracle, with the tabulated multiplier, for
+    N up to MAX_ORACLE_N. It uses the textbook circuit; M5 proper replaces
+    that with the iterative circuit of M3b and reaches N = 1000.
+M7 adds the finder that uses real modular arithmetic.
 """
 
 import numpy as np
 from qiskit import QuantumCircuit
 
 from shor.classical import order_from_samples
-from shor.oracles import controlled_power_15
+from shor.oracles import controlled_power_15, controlled_power_oracle
 from shor.qpe import measure_phases, qpe_circuit
 
 # A finder takes up to this many batches of shots for one base before giving up.
 MAX_BATCHES = 3
+
+# Largest N for the oracle finder while it uses the textbook circuit. That
+# circuit has 3n qubits (2n counting + n target) and 2n dense matrices of size
+# 2^(n+1). Measured time per order: 0.06 s at n = 5, 0.4 s at n = 6, 5 s at
+# n = 7 and 93 s at n = 8. So n = 7 is the limit: N <= 2^7 - 1.
+MAX_ORACLE_N = 127
 
 
 def order_from_batches(sample, t, a, N):
@@ -67,5 +78,52 @@ def find_order_15(a, N=15, shots=10, seed=None):
         raise ValueError(f"find_order_15 only handles N = 15, got N = {N}")
     t = 8
     circuit = order_finding_circuit_15(a, t)  # raises ValueError if gcd(a, 15) != 1
+    rng = np.random.default_rng(seed)
+    return order_from_batches(lambda: measure_phases(circuit, shots, rng), t, a, N)
+
+
+# ----------------------------------------------------------------------------
+# Any N up to MAX_ORACLE_N, with the tabulated multiplier
+# ----------------------------------------------------------------------------
+
+
+def order_finding_circuit_oracle(a, N):
+    """Return the textbook QPE circuit for the order of a mod N.
+
+    n = N.bit_length() target qubits prepared in |1> and t = 2n counting
+    qubits: 3n in total (15 for N = 21). t = 2n is what guarantees that the
+    continued-fraction step can recover r from y (classical.py).
+
+    Unlike N = 15, the order usually does not divide 2^t. The phases s / r
+    are then not exact t-bit fractions, and y is spread around s * 2^t / r,
+    with about 90% of the probability on the two integers next to it.
+    """
+    if N > MAX_ORACLE_N:
+        raise ValueError(
+            f"N = {N} is too large for the textbook circuit: the limit is {MAX_ORACLE_N} "
+            f"({3 * N.bit_length()} qubits would be needed)"
+        )
+    n = N.bit_length()
+    one = QuantumCircuit(n)
+    one.x(0)  # |0...01> = |1>
+    return qpe_circuit(controlled_power_oracle(a, N), 2 * n, n, one)
+
+
+def sample_phases_oracle(a, N, shots, seed=None):
+    """Return the y measured in each of `shots` runs of the oracle circuit.
+
+    This is the raw output of the quantum part, before any post-processing.
+    """
+    return measure_phases(order_finding_circuit_oracle(a, N), shots, seed)
+
+
+def find_order_oracle(a, N, shots=10, seed=None):
+    """Return the order of a mod N found by phase estimation, or None.
+
+    Works for any N up to MAX_ORACLE_N with a coprime to N. seed is an int or
+    a numpy Generator; every batch is drawn from the same generator.
+    """
+    t = 2 * N.bit_length()
+    circuit = order_finding_circuit_oracle(a, N)  # raises ValueError for bad a or N
     rng = np.random.default_rng(seed)
     return order_from_batches(lambda: measure_phases(circuit, shots, rng), t, a, N)

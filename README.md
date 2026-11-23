@@ -13,12 +13,12 @@ The full design, build order and exit tests are in [SHOR_IMPLEMENTATION_PLAN.md]
 | M2 | QFT and inverse QFT | Done |
 | M3 | Quantum phase estimation (textbook and iterative) | Textbook (M3a) done; iterative (M3b) postponed until after M4 |
 | M4 | First end-to-end factoring: N = 15 | Done |
-| M5 | Oracle order finding for N ≤ 1000 | Not started |
+| M5 | Oracle order finding for N ≤ 1000 | Partly done: tabulated multiplier with the textbook circuit, N ≤ 127. N ≤ 1000 needs M3b |
 | M6 | Reversible modular arithmetic (Draper / Beauregard) | Not started |
 | M7 | Full Shor for N ≤ 50 | Not started |
 | M8 | Analysis and optional extensions | Not started |
 
-Factoring N = 15 now runs end to end on a simulated quantum circuit: textbook phase estimation on 12 qubits with multipliers built by hand for that one number. For any other N the order is still found by classical brute force; the general quantum order finders come with M5 and M7, and both need the iterative phase estimation of M3b first.
+Factoring runs end to end on a simulated quantum circuit in two forms. For N = 15 the multipliers are built from gates by hand. For any valid N up to 127 (21, 33, 35, …) the multiplier is tabulated classically as a matrix, which tests phase estimation and the post-processing but is not a scalable circuit. Both use textbook phase estimation. Still to come: the iterative phase estimation of M3b, which takes the tabulated version to N = 1000, and the real modular arithmetic of M6 and M7.
 
 ## Environment setup
 
@@ -48,8 +48,8 @@ shor/
   factor.py          # M1: shor_factor driver, takes any order finder
   qft.py             # M2: QFT and inverse QFT, with and without swaps
   qpe.py             # M3: textbook phase estimation (iterative still to come)
-  oracles.py         # M4: controlled multiplication by a mod 15
-  order_finding.py   # M4: find_order_15, batching of shots
+  oracles.py         # M4: multiplier for N = 15 from gates; M5: tabulated multiplier for any N
+  order_finding.py   # M4: find_order_15; M5: find_order_oracle; batching of shots
 main.py              # command-line entry point: python main.py N
 tests/
   test_smoke.py      # M0: Bell circuit on AerSimulator
@@ -57,8 +57,8 @@ tests/
   test_factor.py     # M1
   test_qft.py        # M2
   test_qpe.py        # M3
-  test_oracles.py    # M4
-  test_order_finding.py  # M4
+  test_oracles.py    # M4, M5
+  test_order_finding.py  # M4, M5
   test_main.py       # main.py
   helpers.py         # test doubles shared by the test files
 experiments/         # M8 scripts and results (empty for now)
@@ -73,9 +73,8 @@ Modules still to come, one per milestone:
 
 | File | Milestone | Contents |
 |---|---|---|
-| `shor/oracles.py` (additions) | M5 | Permutation oracle for general N |
 | `shor/arithmetic.py` | M6 | Fourier-space adders, modular multiplier, controlled-U_a |
-| `shor/order_finding.py` (additions) | M5, M7 | `find_order_oracle`, `find_order_arith` |
+| `shor/order_finding.py` (additions) | M5, M7 | iterative `find_order_oracle` for N ≤ 1000, `find_order_arith` |
 
 ## Running the tests
 
@@ -88,7 +87,7 @@ pytest -k order_from                  # tests whose name matches
 pytest -v                             # list each test
 ```
 
-The suite currently has 310 tests and runs in about five seconds. Each milestone ends with an exit test from the plan; the next milestone does not start until it passes.
+The suite currently has 398 tests and runs in about 15 seconds. Each milestone ends with an exit test from the plan; the next milestone does not start until it passes.
 
 ## Running the project
 
@@ -97,7 +96,8 @@ With the virtual environment active, run `main.py` from the project root:
 ```bash
 python main.py 989                        # classical order finder, random bases
 python main.py 989 --seed 1               # repeatable
-python main.py 15 --method n15 --seed 2   # quantum order finder for N = 15
+python main.py 15 --method n15 --base 7   # quantum order finder for N = 15
+python main.py 21 --method oracle --base 2 # quantum order finder, tabulated multiplier
 python main.py --help
 ```
 
@@ -115,9 +115,21 @@ Order finder: classical (brute-force classical order finder, no quantum circuit)
 | Method | What it runs | Valid N |
 |---|---|---|
 | `classical` (default) | Brute-force order, no quantum circuit | any valid N |
-| `n15` | Textbook phase estimation on a 12-qubit simulated circuit, 10 shots per batch | 15 only |
+| `n15` | Textbook phase estimation on a 12-qubit simulated circuit, multipliers built from gates, 10 shots per batch | 15 only |
+| `oracle` | Textbook phase estimation on 3n simulated qubits, multiplier tabulated as a matrix, 10 shots per batch | up to 127 |
 
-For N = 15 half of the random bases share a factor with 15, and then no order finding is needed and the circuit never runs. `--seed 2` picks a = 2, which does go through the circuit. The order finders of M5 and M7 will be added to `ORDER_FINDERS` in `main.py` as they are built.
+`--base a` tries the base a first. For small N many random bases share a factor with N; the factor then comes from a gcd, no order finding is needed and the circuit never runs. A base coprime to N, such as 2, always goes through the order finder:
+
+```
+$ python main.py 21 --method oracle --base 2
+Factoring N = 21 (n = 5 bits)
+Order finder: oracle (textbook phase estimation on 3n simulated qubits, multiplier tabulated as a matrix, N up to 127)
+  circuit: 15 qubits, 10 phase bits
+  a = 2: order r = 6, a^(r/2) ≡ 8 (mod N), gcd(8 ± 1, N) = 7 and 3
+21 = 3 × 7
+```
+
+The `oracle` method takes well under a second per order for N up to 63 (18 qubits) and about 5 seconds for N from 65 to 127 (21 qubits). N = 143 would need 24 qubits and took 93 seconds per order, which is why the limit is 127. The order finder of M7 will be added to `ORDER_FINDERS` in `main.py` when it is built.
 
 The QFT of M2 is a circuit builder rather than something to run on its own:
 

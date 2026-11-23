@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from qiskit import QuantumCircuit
 
+from helpers import qpe_theory as theory
 from shor.qpe import exact_phase_distribution, measure_phases, qpe_circuit
 
 
@@ -29,15 +30,6 @@ def one():
     qc = QuantumCircuit(1)
     qc.x(0)
     return qc
-
-
-def theory(phi, t):
-    """P(y) = sin^2(pi 2^t d) / (4^t sin^2(pi d)) with d = phi - y / 2^t."""
-    d = phi - np.arange(2**t) / 2**t
-    with np.errstate(divide="ignore", invalid="ignore"):
-        probs = np.sin(pi * 2**t * d) ** 2 / (4.0**t * np.sin(pi * d) ** 2)
-    probs[np.isnan(probs)] = 1.0  # d is an integer: phi is exactly y / 2^t
-    return probs
 
 
 def phase_qpe(phi, t, prepare=one):

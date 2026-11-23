@@ -1,4 +1,13 @@
-"""M4: the modular multiplier U_a |y> = |a * y mod 15>, built by hand.
+"""Modular multipliers U_a |y> = |a * y mod N> for phase estimation.
+
+Two kinds live here:
+
+  - M4, built by hand from gates, for N = 15 only (below).
+  - The tabulated multiplier for any N (end of this file): a permutation
+    matrix computed classically. It is the first half of M5.
+
+The hand-built multiplier for N = 15
+------------------------------------
 
 This only works for N = 15, because it uses two facts about that number.
 The target register holds y in four qubits, y = q_0 + 2 q_1 + 4 q_2 + 8 q_3.
@@ -25,11 +34,21 @@ The states y = 0 and y = 15 are not residues coprime to 15 and do not occur in
 order finding. The rotation leaves both alone and NOT exchanges them, so U_a
 is a permutation of all 16 basis states and therefore unitary.
 
-M5 will add the permutation-matrix oracle for general N to this file.
+The tabulated multiplier for any N
+----------------------------------
+
+For general N there is no such shortcut; a multiplier made of gates is the
+modular arithmetic of M6. Until then U_a is written down as a matrix: for
+every basis state y we compute a * y mod N classically and put a 1 in that
+row. This is an "oracle": it lets phase estimation and the post-processing be
+tested for any N, but it is not a quantum algorithm for multiplying. Building
+the matrix takes 2^n steps, which is the exponential cost Shor's algorithm
+is meant to avoid.
 """
 
 from math import gcd
 
+import numpy as np
 from qiskit import QuantumCircuit
 
 # SWAPs on (q_0, q_1, q_2, q_3) that move the bit in place j to place j + k
@@ -88,3 +107,56 @@ def controlled_power_15(a):
     is repeated squaring and needs no knowledge of the order.
     """
     return lambda j: controlled_multiplier_15(pow(a, 2**j, 15))
+
+
+# ----------------------------------------------------------------------------
+# The tabulated multiplier for any N
+# ----------------------------------------------------------------------------
+
+
+def controlled_permutation(a, N):
+    """Return the matrix of controlled-U_a for any N, with a coprime to N.
+
+    It acts on n + 1 qubits, n = N.bit_length(): qubit 0 is the control and
+    qubits 1..n hold y, so the basis state |y>|c> has index c + 2 * y.
+
+      - control 0 (even index): nothing happens;
+      - control 1 (odd index):  y -> a * y mod N        for y < N,
+                                y -> y                  for N <= y < 2^n.
+
+    The values y >= N are not residues mod N and never occur in order finding.
+    Leaving them alone makes the map a permutation of all basis states: a is
+    invertible mod N, so y -> a * y mod N already permutes 0..N-1. A
+    permutation matrix is unitary.
+    """
+    if N < 2:
+        raise ValueError(f"N = {N} must be at least 2")
+    a %= N
+    if gcd(a, N) != 1:
+        raise ValueError(f"a = {a} shares a factor with {N}, so multiplying by it is not reversible")
+
+    n = N.bit_length()
+    matrix = np.zeros((2 ** (n + 1), 2 ** (n + 1)))
+    for y in range(2**n):
+        image = a * y % N if y < N else y
+        matrix[2 * y, 2 * y] = 1  # control 0: column 2y -> row 2y
+        matrix[1 + 2 * image, 1 + 2 * y] = 1  # control 1: column 1+2y -> row 1+2*image
+    return matrix
+
+
+def controlled_power_oracle(a, N):
+    """Return the function j -> controlled-U_a^(2^j), in the form QPE expects.
+
+    As for N = 15, the power is a single multiplier: U_a^(2^j) = U_b with
+    b = a^(2^j) mod N, found by repeated squaring. Each power is therefore
+    one matrix of the same size, not 2^j copies of U_a.
+    """
+    n = N.bit_length()
+
+    def controlled_power(j):
+        b = pow(a, 2**j, N)
+        qc = QuantumCircuit(n + 1, name=f"c-U_{b}")
+        qc.unitary(controlled_permutation(b, N), range(n + 1), label=f"c-U_{b}")
+        return qc
+
+    return controlled_power

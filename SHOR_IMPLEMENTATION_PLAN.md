@@ -63,7 +63,7 @@ requirements.txt
 
 ## 5. Milestones
 
-Each milestone ends with an exit test. Do not start the next milestone until it passes. One agreed exception (2026-11-23): M3b is postponed and M4 was built first, since M4 uses only the textbook circuit of M3a. M3b and its exit test 3 must be done before M5.
+Each milestone ends with an exit test. Do not start the next milestone until it passes. One agreed exception (2026-11-23): M3b is postponed and M4 was built first, since M4 uses only the textbook circuit of M3a. M3b and its exit test 3 must be done before the rest of M5. The first half of M5 was also built ahead of M3b (see M5).
 
 ### M0 — Setup
 
@@ -171,6 +171,8 @@ Exit tests:
 - `sample_phases_oracle(a, N, shots, seed=None)`: the same circuit without the post-processing, returning the list of measured y. `find_order_oracle` is built on it, and the distribution tests use it directly.
 
 This oracle is tabulated classically, so it validates QPE and post-processing; it is not a scalable circuit.
+
+Status (2026-11-23): the first half is built, on the textbook circuit of M3a instead of M3b. `controlled_permutation`, `controlled_power_oracle`, `order_finding_circuit_oracle`, `sample_phases_oracle` and `find_order_oracle` exist with the signatures above and are tested for N = 15 to 63, including the exact y distribution for N = 21 and 35. The textbook circuit needs 3n qubits and 2n dense matrices, so it is capped at `MAX_ORACLE_N = 127`: measured time per order was 0.06 s at n = 5, 0.4 s at n = 6, 5 s at n = 7 and 93 s at n = 8. What remains for M5 is to run the M3b rounds on a `Statevector` as described below, raise the cap to 1000, and pass exit tests 1 to 3; the function names and signatures stay the same.
 
 M5 does not run the M3b circuit: `Statevector` cannot execute `if_test`. It runs the M3b rounds in a Python loop on a `Statevector` and takes the correction angle from `correction_angle(k, bits)` of M3. After each round, continue from the state that the measurement returns, `outcome, sv = sv.measure([0])`, and apply X to the control if the outcome was 1. Discarding that state and letting a reset re-sample the control loses the correlation with the target: in a prototype the fraction of shots next to a peak fell from 0.90 to 0.28.
 
